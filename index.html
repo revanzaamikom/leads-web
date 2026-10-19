@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Template Chat Leads</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:#0f1115; color:#e8eaed; }
+  header { position:sticky; top:0; background:#161a22; padding:12px 14px; border-bottom:1px solid #262c38; z-index:5; }
+  h1 { font-size:17px; margin:0 0 8px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=search], input[type=password] { flex:1; min-width:140px; padding:9px 10px; border-radius:8px; border:1px solid #333b4a; background:#0f1115; color:#e8eaed; font-size:15px; }
+  button { padding:9px 12px; border-radius:8px; border:1px solid #333b4a; background:#1e242f; color:#e8eaed; font-size:14px; cursor:pointer; }
+  button.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+  button.wa { background:#1faa55; border-color:#1faa55; color:#fff; }
+  button:disabled { opacity:.5; }
+  .tab { padding:7px 11px; border-radius:999px; }
+  .tab.on { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+  #sync { font-size:12px; color:#9aa4b2; margin-top:6px; min-height:15px; }
+  main { padding:12px 14px 40px; max-width:760px; margin:0 auto; }
+  .card { background:#161a22; border:1px solid #262c38; border-radius:12px; padding:12px; margin-bottom:10px; }
+  .card h2 { font-size:15px; margin:0 0 2px; }
+  .meta { font-size:12.5px; color:#9aa4b2; margin-bottom:8px; }
+  .badge { display:inline-block; font-size:11px; padding:2px 7px; border-radius:999px; background:#3a2b12; color:#f0b429; margin-left:6px; vertical-align:middle; }
+  .badge.done { background:#12351f; color:#4ade80; }
+  .msg { font-size:13.5px; white-space:pre-wrap; background:#0f1115; border:1px solid #262c38; border-radius:8px; padding:9px; margin:8px 0; max-height:150px; overflow:auto; }
+  #gate { max-width:420px; margin:60px auto; padding:0 16px; }
+  #gate p { color:#9aa4b2; font-size:14px; line-height:1.5; }
+  .err { color:#f87171; font-size:13.5px; min-height:18px; }
+  a { color:#6cb6ff; }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>Template Chat Leads</h1>
+  <p>Tempel token GitHub sekali saja di HP ini. Token dipakai buat baca dan simpan data leads di repo privat kamu, langsung dari browser.</p>
+  <div class="row">
+    <input type="password" id="tok" placeholder="github_pat_..." autocomplete="off">
+    <button class="primary" id="btnTok">Masuk</button>
+  </div>
+  <div class="err" id="gateErr"></div>
+  <p style="font-size:12.5px">Belum punya token? Bikin di GitHub: Settings → Developer settings → Personal access tokens → Fine-grained → akses cuma ke repo <b>template-chat-data</b>, permission <b>Contents: Read and write</b>.</p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>Leads <span id="count" class="meta"></span></h1>
+    <div class="row">
+      <input type="search" id="q" placeholder="Cari nama / IG / kota / niche...">
+      <button id="btnRefresh">Muat ulang</button>
+      <button id="btnOut">Ganti token</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="tab on" data-f="all">Semua</button>
+      <button class="tab" data-f="pending">Pending</button>
+      <button class="tab" data-f="sent">Sudah terkirim</button>
+      <button class="tab" data-f="due">Waktunya follow-up</button>
+    </div>
+    <div id="sync"></div>
+  </header>
+  <main id="list"></main>
+</div>
+
+<script>
+const OWNER = 'revanzaamikom', REPO = 'template-chat-data', PATH = 'db.json';
+const API = 'https://api.github.com/repos/' + OWNER + '/' + REPO + '/contents/' + PATH;
+let token = localStorage.getItem('leads_pat') || '';
+let db = null, sha = null, filter = 'all', saveTimer = null, saving = false, dirtyAgain = false;
+
+const $ = s => document.querySelector(s);
+function b64enc(str){ const bytes = new TextEncoder().encode(str); let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b)); return btoa(bin); }
+function b64dec(b64){ const bin = atob(b64.replace(/\n/g,'')); const bytes = Uint8Array.from(bin, c=>c.charCodeAt(0)); return new TextDecoder().decode(bytes); }
+function api(method, body){
+  return fetch(API, { method, headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+}
+function setSync(t){ $('#sync').textContent = t; }
+
+async function load(){
+  setSync('Memuat data...');
+  const r = await api('GET');
+  if (r.status === 401 || r.status === 403 || r.status === 404) throw new Error('Token ditolak GitHub (' + r.status + '). Cek token dan akses repo-nya.');
+  if (!r.ok) throw new Error('Gagal memuat (' + r.status + ')');
+  const j = await r.json();
+  sha = j.sha;
+  db = JSON.parse(b64dec(j.content));
+  setSync('Data termuat. ' + db.leads.length + ' leads.');
+  render();
+}
+async function save(){
+  if (saving) { dirtyAgain = true; return; }
+  saving = true; setSync('Menyimpan ke GitHub...');
+  try {
+    const r = await api('PUT', { message: 'update status leads', content: b64enc(JSON.stringify(db, null, 1)), sha });
+    if (r.status === 409 || r.status === 422) { // sha basi: muat ulang lalu simpan lagi sekali
+      const g = await api('GET'); const j = await g.json(); sha = j.sha;
+      const r2 = await api('PUT', { message: 'update status leads', content: b64enc(JSON.stringify(db, null, 1)), sha });
+      if (!r2.ok) throw new Error('HTTP ' + r2.status);
+      sha = (await r2.json()).content.sha;
+    } else if (!r.ok) throw new Error('HTTP ' + r.status);
+    else sha = (await r.json()).content.sha;
+    setSync('Tersimpan ✓ ' + new Date().toLocaleTimeString('id-ID'));
+  } catch(e) { setSync('Gagal menyimpan: ' + e.message + ' (ketuk Muat ulang, lalu ulangi tandai)'); }
+  saving = false;
+  if (dirtyAgain) { dirtyAgain = false; queueSave(); }
+}
+function queueSave(){ clearTimeout(saveTimer); saveTimer = setTimeout(save, 700); }
+
+function due(l){ return l.status === 'first_sent' && !l.followup_sent_at && l.first_sent_at && (Date.now() - new Date(l.first_sent_at).getTime()) >= 3*24*3600*1000; }
+function visible(l){
+  if (filter === 'pending' && l.status !== 'pending') return false;
+  if (filter === 'sent' && l.status !== 'first_sent') return false;
+  if (filter === 'due' && !due(l)) return false;
+  const q = $('#q').value.trim().toLowerCase();
+  if (q) { const hay = (l.business_name + ' ' + l.ig_handle + ' ' + l.niche).toLowerCase(); if (!hay.includes(q)) return false; }
+  return true;
+}
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function render(){
+  const leads = db.leads.filter(visible);
+  $('#count').textContent = '(' + leads.length + ' ditampilkan)';
+  $('#list').innerHTML = leads.map(l => {
+    const isSent = l.status === 'first_sent';
+    const text = isSent ? l.followup : l.message;
+    const wa = 'https://wa.me/' + l.wa_number + '?text=' + encodeURIComponent(text);
+    let badges = '';
+    if (isSent) badges += '<span class="badge done">pesan pertama terkirim</span>';
+    if (l.followup_sent_at) badges += '<span class="badge done">follow-up terkirim</span>';
+    else if (due(l)) badges += '<span class="badge">waktunya follow-up</span>';
+    let actions = '';
+    if (!isSent) actions = '<a href="' + wa + '" target="_blank" rel="noopener"><button class="wa">Kirim pesan pertama</button></a> <button data-mark="first" data-id="' + l.id + '">Tandai terkirim</button>';
+    else if (!l.followup_sent_at) actions = '<a href="' + wa + '" target="_blank" rel="noopener"><button class="wa">Kirim follow-up</button></a> <button data-mark="fu" data-id="' + l.id + '">Tandai follow-up terkirim</button>';
+    else actions = '<span class="meta">Selesai dua tahap.</span>';
+    return '<div class="card"><h2>' + esc(l.business_name) + badges + '</h2>' +
+      '<div class="meta">@' + esc(l.ig_handle) + ' · ' + esc(l.niche) + ' · ' + Number(l.followers).toLocaleString('id-ID') + ' followers</div>' +
+      '<div class="msg">' + esc(text) + '</div><div class="row">' + actions + '</div></div>';
+  }).join('') || '<p class="meta">Tidak ada leads di filter ini.</p>';
+  document.querySelectorAll('[data-mark]').forEach(b => b.addEventListener('click', () => {
+    const l = db.leads.find(x => x.id == b.dataset.id);
+    if (b.dataset.mark === 'first') { l.status = 'first_sent'; l.first_sent_at = new Date().toISOString(); }
+    else { l.followup_sent_at = new Date().toISOString(); }
+    render(); queueSave();
+  }));
+}
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('on')); t.classList.add('on'); filter = t.dataset.f; render();
+}));
+$('#q').addEventListener('input', render);
+$('#btnRefresh').addEventListener('click', () => load().catch(e => setSync(e.message)));
+$('#btnOut').addEventListener('click', () => { localStorage.removeItem('leads_pat'); location.reload(); });
+$('#btnTok').addEventListener('click', async () => {
+  token = $('#tok').value.trim();
+  if (!token) { $('#gateErr').textContent = 'Tokennya masih kosong.'; return; }
+  $('#gateErr').textContent = '';
+  try { await load(); localStorage.setItem('leads_pat', token); $('#gate').hidden = true; $('#app').hidden = false; }
+  catch(e) { $('#gateErr').textContent = e.message; }
+});
+
+(async function init(){
+  if (!token) { $('#gate').hidden = false; return; }
+  try { await load(); $('#app').hidden = false; }
+  catch(e) { $('#gate').hidden = false; $('#gateErr').textContent = e.message; }
+})();
+</script>
+</body>
+</html>
