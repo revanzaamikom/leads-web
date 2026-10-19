@@ -265,9 +265,10 @@ function render(){
   const nD = all.filter(isDue).length;
   $('#nPending').textContent = nP; $('#nSent').textContent = nS;
   if (!batchOptsBuilt) {
+    const BATCH_LABELS = { 2:'Konveksi & Laundry', 3:'Florist, Interior, Furniture, Grosir', 4:'Klinik Hewan & Cleaning', 5:'Rental Mobil', 6:'Detailing Mobil, WO, Las & Aluminium', 7:'Rental Mobil', 8:'Rental Mobil Jogja, Magelang, Temanggung', 9:'Jasa Rumahan, Otomotif & Produksi', 10:'Rental Kamera, Kursus, Event & Thrift', 11:'Interior, Furniture & Konveksi' };
     const counts = {};
     all.forEach(l => { if (l.batch) counts[l.batch] = (counts[l.batch] || 0) + 1; });
-    $('#batchSel').innerHTML = '<option value="all">Semua batch</option>' + Object.keys(counts).sort((a,b) => a-b).map(b => '<option value="' + b + '">Batch ' + b + ' · ' + counts[b] + ' leads</option>').join('');
+    $('#batchSel').innerHTML = '<option value="all">Semua batch</option>' + Object.keys(counts).sort((a,b) => a-b).map(b => '<option value="' + b + '">Batch ' + b + ' · ' + (BATCH_LABELS[b] || '') + ' (' + counts[b] + ')</option>').join('');
     $('#batchSel').value = batchSel;
     batchOptsBuilt = true;
   }
