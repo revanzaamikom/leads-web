@@ -52,6 +52,9 @@
   .tab.on .n{ background:rgba(255,255,255,.22); color:#fff; }
   .tab .n.hot{ background:var(--amber-bg); color:var(--amber-fg); }
   .tab.on .n.hot{ background:#F59E0B; color:#fff; }
+  .batchrow{ max-width:780px; margin:8px auto 0; display:flex; align-items:center; gap:10px; }
+  .batchrow label{ font-size:.85rem; font-weight:700; color:var(--muted-fg); flex:none; }
+  #batchSel{ flex:1; height:48px; border:1px solid var(--border); border-radius:12px; background:var(--card); padding:0 12px; font-size:.95rem; font-family:inherit; color:var(--fg); font-weight:600; }
   #sync{ max-width:780px; margin:4px auto 0; font-size:.78rem; color:var(--muted-fg); min-height:18px; display:flex; align-items:center; gap:6px; }
   #sync .dot{ width:8px; height:8px; border-radius:99px; background:var(--accent); flex:none; }
   #sync.err{ color:var(--danger); } #sync.err .dot{ background:var(--danger); }
@@ -155,10 +158,12 @@
       <input type="search" id="q" placeholder="Cari nama, IG, niche, kota..." aria-label="Cari leads">
     </div>
     <div class="tabs" id="tabs">
-      <button class="tab on" data-f="all">Semua <span class="n" id="nAll">0</span></button>
-      <button class="tab" data-f="pending">Antrian <span class="n" id="nPending">0</span></button>
-      <button class="tab" data-f="due">Follow-up <span class="n hot" id="nDue">0</span></button>
+      <button class="tab on" data-f="pending">Pending <span class="n" id="nPending">0</span></button>
       <button class="tab" data-f="sent">Terkirim <span class="n" id="nSent">0</span></button>
+    </div>
+    <div class="batchrow">
+      <label for="batchSel">Batch</label>
+      <select id="batchSel"><option value="all">Semua batch</option></select>
     </div>
     <div id="sync"><span class="dot"></span><span id="syncText"></span></div>
   </header>
@@ -174,7 +179,8 @@ const WA_ICON = '<svg viewBox="0 0 24 24"><path d="M17.5 14.4c-.3-.15-1.76-.87-2
 const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="19" height="19"><path d="M20 6 9 17l-5-5"/></svg>';
 
 let token = localStorage.getItem('leads_pat') || '';
-let db = null, sha = null, filter = 'all', saveTimer = null, saving = false, dirtyAgain = false;
+let db = null, sha = null, filter = 'pending', saveTimer = null, saving = false, dirtyAgain = false;
+let batchSel = 'all', batchOptsBuilt = false;
 let undoSnapshot = null, toastTimer = null;
 const expanded = new Set();
 
@@ -218,7 +224,7 @@ function isDue(l){ return l.status === 'first_sent' && !l.followup_sent_at && l.
 function visible(l){
   if (filter === 'pending' && l.status !== 'pending') return false;
   if (filter === 'sent' && l.status !== 'first_sent') return false;
-  if (filter === 'due' && !isDue(l)) return false;
+  if (batchSel !== 'all' && l.batch !== +batchSel) return false;
   const q = $('#q').value.trim().toLowerCase();
   if (q && !(l.business_name + ' ' + l.ig_handle + ' ' + l.niche).toLowerCase().includes(q)) return false;
   return true;
@@ -244,7 +250,14 @@ function render(){
   const nP = all.filter(l => l.status === 'pending').length;
   const nS = all.filter(l => l.status === 'first_sent').length;
   const nD = all.filter(isDue).length;
-  $('#nAll').textContent = all.length; $('#nPending').textContent = nP; $('#nSent').textContent = nS; $('#nDue').textContent = nD;
+  $('#nPending').textContent = nP; $('#nSent').textContent = nS;
+  if (!batchOptsBuilt) {
+    const counts = {};
+    all.forEach(l => { if (l.batch) counts[l.batch] = (counts[l.batch] || 0) + 1; });
+    $('#batchSel').innerHTML = '<option value="all">Semua batch</option>' + Object.keys(counts).sort((a,b) => a-b).map(b => '<option value="' + b + '">Batch ' + b + ' · ' + counts[b] + ' leads</option>').join('');
+    $('#batchSel').value = batchSel;
+    batchOptsBuilt = true;
+  }
   const donePct = all.length ? Math.round(nS / all.length * 100) : 0;
   $('#progText').innerHTML = '<b>' + nS + ' dari ' + all.length + '</b> leads sudah dihubungi';
   $('#progPct').textContent = donePct + '%';
@@ -253,8 +266,8 @@ function render(){
 
   const leads = all.filter(visible);
   if (!leads.length) {
-    const msgs = { all:['Belum ada leads','Datanya masih kosong.'], pending:['Antrian bersih','Semua leads sudah dihubungi. Kerja bagus.'], due:['Tidak ada yang jatuh tempo','Follow-up muncul di sini 3 hari setelah pesan pertama terkirim.'], sent:['Belum ada yang terkirim','Leads yang sudah kamu hubungi bakal tampil di sini.'] };
-    const m = msgs[filter] || msgs.all;
+    const msgs = { pending:['Antrian bersih','Semua leads di pilihan ini sudah dihubungi.'], sent:['Belum ada yang terkirim','Leads yang sudah kamu hubungi bakal tampil di sini.'] };
+    const m = msgs[filter] || msgs.pending;
     $('#list').innerHTML = '<div class="empty"><div class="big">' + m[0] + '</div>' + m[1] + '</div>';
     return;
   }
@@ -273,7 +286,7 @@ function render(){
     const note = (sent && l.followup_sent_at) ? '<div class="done-note">Dua tahap selesai. Pesan pertama ' + fmtDate(l.first_sent_at) + ', follow-up ' + fmtDate(l.followup_sent_at) + '.</div>' : '';
     const open = expanded.has(l.id);
     return '<article class="card"><div class="cardtop"><div><h2>' + esc(l.business_name) + '</h2>' +
-      '<div class="meta">@' + esc(l.ig_handle) + ' · ' + esc(l.niche) + ' · <b>' + Number(l.followers).toLocaleString('id-ID') + '</b> followers</div></div>' +
+      '<div class="meta">@' + esc(l.ig_handle) + ' · ' + esc(l.niche) + ' · <b>' + Number(l.followers).toLocaleString('id-ID') + '</b> followers · Batch ' + l.batch + '</div></div>' +
       '<div class="chips">' + chips + '</div></div>' +
       '<div class="msg' + (open ? '' : ' clamped') + '">' + esc(text) + '</div>' +
       '<button class="expand" data-expand="' + l.id + '">' + (open ? 'Tutup pesan' : 'Lihat pesan') + '</button>' +
@@ -298,6 +311,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('on')); t.classList.add('on'); filter = t.dataset.f; render();
 }));
 $('#q').addEventListener('input', render);
+$('#batchSel').addEventListener('change', () => { batchSel = $('#batchSel').value; render(); });
 $('#btnRefresh').addEventListener('click', () => load().catch(e => setSync(e.message, true)));
 $('#btnOut').addEventListener('click', () => { localStorage.removeItem('leads_pat'); location.reload(); });
 $('#btnTok').addEventListener('click', async () => {
