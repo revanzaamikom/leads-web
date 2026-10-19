@@ -179,10 +179,22 @@ const WA_ICON = '<svg viewBox="0 0 24 24"><path d="M17.5 14.4c-.3-.15-1.76-.87-2
 const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="19" height="19"><path d="M20 6 9 17l-5-5"/></svg>';
 
 let token = localStorage.getItem('leads_pat') || '';
-let db = null, sha = null, filter = 'pending', saveTimer = null, saving = false, dirtyAgain = false;
-let batchSel = 'all', batchOptsBuilt = false;
+let savedUI = {};
+try { savedUI = JSON.parse(localStorage.getItem('leads_ui') || '{}'); } catch(e) {}
+let db = null, sha = null, filter = savedUI.filter || 'pending', saveTimer = null, saving = false, dirtyAgain = false;
+let batchSel = savedUI.batch ? String(savedUI.batch) : 'all', batchOptsBuilt = false;
 let undoSnapshot = null, toastTimer = null;
-const expanded = new Set();
+const expanded = new Set(savedUI.expanded || []);
+function persistUI(){ try { localStorage.setItem('leads_ui', JSON.stringify({ filter, batchSel, q: $('#q').value, expanded: [...expanded] })); } catch(e) {} }
+let scrollSaveT = null;
+window.addEventListener('scroll', () => { clearTimeout(scrollSaveT); scrollSaveT = setTimeout(() => { try { sessionStorage.setItem('leads_scroll', String(window.scrollY)); } catch(e) {} }, 120); }, { passive: true });
+document.addEventListener('click', e => { if (e.target.closest('.btn-wa')) { try { sessionStorage.setItem('leads_scroll', String(window.scrollY)); } catch(e) {} } });
+function restoreScroll(){
+  let y = 0; try { y = +(sessionStorage.getItem('leads_scroll') || 0); } catch(e) {}
+  if (!y) return;
+  let tries = 0;
+  const iv = setInterval(() => { window.scrollTo(0, y); if (++tries >= 8 || Math.abs(window.scrollY - y) < 4) clearInterval(iv); }, 90);
+}
 
 const $ = s => document.querySelector(s);
 function b64enc(str){ const bytes = new TextEncoder().encode(str); let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b)); return btoa(bin); }
@@ -246,6 +258,7 @@ $('#toastBtn').addEventListener('click', () => {
 
 function render(){
   if (!db) return;
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.f === filter));
   const all = db.leads;
   const nP = all.filter(l => l.status === 'pending').length;
   const nS = all.filter(l => l.status === 'first_sent').length;
@@ -295,6 +308,7 @@ function render(){
   document.querySelectorAll('[data-expand]').forEach(b => b.addEventListener('click', () => {
     const id = +b.dataset.expand;
     expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+    persistUI();
     render();
   }));
   document.querySelectorAll('[data-mark]').forEach(b => b.addEventListener('click', () => {
@@ -308,10 +322,10 @@ function render(){
 }
 
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.remove('on')); t.classList.add('on'); filter = t.dataset.f; render();
+  filter = t.dataset.f; persistUI(); render();
 }));
-$('#q').addEventListener('input', render);
-$('#batchSel').addEventListener('change', () => { batchSel = $('#batchSel').value; render(); });
+$('#q').addEventListener('input', () => { persistUI(); render(); });
+$('#batchSel').addEventListener('change', () => { batchSel = $('#batchSel').value; persistUI(); render(); });
 $('#btnRefresh').addEventListener('click', () => load().catch(e => setSync(e.message, true)));
 $('#btnOut').addEventListener('click', () => { localStorage.removeItem('leads_pat'); location.reload(); });
 $('#btnTok').addEventListener('click', async () => {
@@ -319,15 +333,16 @@ $('#btnTok').addEventListener('click', async () => {
   if (!token) { $('#gateErr').textContent = 'Tokennya masih kosong.'; return; }
   $('#gateErr').textContent = '';
   $('#btnTok').textContent = 'Memeriksa...';
-  try { await load(); localStorage.setItem('leads_pat', token); $('#gate').hidden = true; $('#app').hidden = false; }
+  try { await load(); localStorage.setItem('leads_pat', token); $('#gate').hidden = true; $('#app').hidden = false; restoreScroll(); }
   catch(e) { $('#gateErr').textContent = e.message; $('#btnTok').textContent = 'Masuk'; }
 });
 
 (async function init(){
+  if (savedUI.q) $('#q').value = savedUI.q;
   if (!token) { $('#gate').hidden = false; return; }
   $('#app').hidden = false;
   $('#list').innerHTML = '<div class="skel"><div style="width:55%"></div><div style="width:85%"></div><div style="width:70%"></div></div><div class="skel"><div style="width:50%"></div><div style="width:80%"></div><div style="width:65%"></div></div>';
-  try { await load(); }
+  try { await load(); restoreScroll(); }
   catch(e) { $('#app').hidden = true; $('#gate').hidden = false; $('#gateErr').textContent = e.message; }
 })();
 </script>
